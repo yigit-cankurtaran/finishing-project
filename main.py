@@ -2,11 +2,13 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+# might give a warning but it works, safe to ignore
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Conv1D, MaxPooling1D, Flatten, Dropout
 from tensorflow.keras.optimizers import Adam
 
 
+# prototype model for the eeg/ecg signals
 def preprocess_signal_data(data, labels, sampling_rate, window_size=1000):
     """
     Preprocess EEG/ECG signal data by segmenting it into windows
