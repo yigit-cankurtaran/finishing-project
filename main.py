@@ -3,9 +3,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 # these packages might show import errors but they work
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Conv1D, MaxPooling1D, Flatten, Dropout
-from tensorflow.keras.optimizers import Adam
+from keras.api.models import Sequential
+from keras.api.layers import Dense, Conv1D, MaxPooling1D, Flatten, Dropout
+from keras.api.optimizers import Adam
 
 
 def preprocess_signal_data(data, labels, sampling_rate, window_size=1000):
