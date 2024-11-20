@@ -17,6 +17,9 @@ class SignalDataset(Dataset):
         # tensors are better for training and run on gpus
         self.data = torch.FloatTensor(data)
         self.labels = torch.FloatTensor(labels)
+        # labels are binary (0/1) values
+        # using them as in "normal vs abnormal heartbeat"
+        # or "asleep and awake brain activity" etc.
 
     def __len__(self):
         return len(self.data)
@@ -38,6 +41,9 @@ class SignalCNN(nn.Module):
         # first convolutional layer: 1 input channel -> 16 output channels
         # convolutional layers scan through the signal looking for patterns
         self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
+        # conv1d is a 1D convolutional layer
+        # data is 1d because it's a time series
+        # eeg/ecg/etc
         # second convolutional layer: 16 input channels -> 32 output channels
         self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
         # MaxPooling layer with kernel size 2
@@ -47,17 +53,24 @@ class SignalCNN(nn.Module):
         # prevents overfitting
         self.dropout1 = nn.Dropout(0.3)
         self.dropout2 = nn.Dropout(0.3)
-        # turning of a random 30% of the neurons during training
+        # turning off a random 30% of the neurons during training
 
         # calculate the size of flattened features dynamically
         # this ensures the model works with different input sizes
         with torch.no_grad():
+            # no gradient required for input_shape
             x = torch.randn(1, 1, input_shape)
             x = self.pool(torch.relu(self.conv1(x)))
+            # relu is a non-linear activation function
+            # turns negative values to 0
+            # introduces non-linearity, helps complex patterns
             x = self.dropout1(x)
             x = self.pool(torch.relu(self.conv2(x)))
             x = self.dropout2(x)
             x = x.flatten(1)
+            # flattening the tensor converts it to a 1D array
+            # flattening is useful for feeding into dense layers
+            # dense layers connect EVERY input to every output
             flat_features = x.shape[1]
 
         # Fully connected layers
@@ -154,10 +167,13 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,
         y_processed,
-        test_size=0.2,
-        random_state=42,
-        shuffle=True,
+        test_size=0.2,  # 20% of data is used for testing
+        random_state=42,  # seed for reproducibility
+        shuffle=True,  # shuffle the data before splitting
         stratify=y_processed,  # Added stratification to maintain class distribution
+        # we need to maintain the same distribution of classes
+        # class distributoin = number of occurences of each class
+        # e.g. 30% 1, 70% 0
     )
 
     # Print data shapes and class distribution
@@ -170,6 +186,8 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
     # Create data loaders
     train_dataset = SignalDataset(X_train, y_train)
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    # DataLoader is a class that loads data in batches
+    # it's used to improve training speed
     test_dataset = SignalDataset(X_test, y_test)
     test_loader = DataLoader(test_dataset, batch_size=16)
 
@@ -201,11 +219,14 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
             inputs, labels = inputs.to(device), labels.to(device)
 
             # Forward pass
+            # process input data layer by layer
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels.unsqueeze(1))
 
             # Backward pass
+            # compute gradients by backpropagation
+            # updates weights during training
             loss.backward()
             optimizer.step()
 
