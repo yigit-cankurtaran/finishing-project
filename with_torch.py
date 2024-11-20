@@ -14,6 +14,7 @@ class SignalDataset(Dataset):
 
     def __init__(self, data, labels):
         # convert numpy arrays to PyTorch tensors
+        # tensors are better for training and run on gpus
         self.data = torch.FloatTensor(data)
         self.labels = torch.FloatTensor(labels)
 
@@ -35,14 +36,18 @@ class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
         # first convolutional layer: 1 input channel -> 16 output channels
+        # convolutional layers scan through the signal looking for patterns
         self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
         # second convolutional layer: 16 input channels -> 32 output channels
         self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
         # MaxPooling layer with kernel size 2
+        # reduces the number of features in the signal
         self.pool = nn.MaxPool1d(2)
         # dropout layers for regularization
+        # prevents overfitting
         self.dropout1 = nn.Dropout(0.3)
         self.dropout2 = nn.Dropout(0.3)
+        # turning of a random 30% of the neurons during training
 
         # calculate the size of flattened features dynamically
         # this ensures the model works with different input sizes
@@ -94,6 +99,9 @@ def preprocess_signal_data(data, labels, sampling_rate, window_size=1000):
     segment_labels = []
 
     # Create overlapping windows (50% overlap)
+    # take segments of the signal with overlap
+    # each window shares 50% of its data with the next window
+    # this is to prevent the model from learning the same features
     for i in range(0, len(data) - window_size, window_size // 2):
         segment = data[i : i + window_size]
         if len(segment) == window_size:
@@ -155,6 +163,7 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
     # Print data shapes and class distribution
     print(f"Training data shape: {X_train.shape}")
     print(f"Testing data shape: {X_test.shape}")
+    # the 2 lines above might show an error but they work
     print(f"Training labels distribution: {np.bincount(y_train)}")
     print(f"Testing labels distribution: {np.bincount(y_test)}")
 
