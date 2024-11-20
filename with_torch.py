@@ -321,7 +321,7 @@ if __name__ == "__main__":
     print("Starting the program...")
 
     # Create synthetic data with structure
-    signal_length = 10000
+    signal_length = 1000000
     t = np.linspace(0, 10, signal_length)
     # Generate signal: sine wave + noise
     X_dummy = np.sin(2 * np.pi * t) + np.random.normal(0, 0.5, signal_length)
@@ -344,3 +344,6 @@ if __name__ == "__main__":
     print("\nTraining History:")
     print("Final training accuracy:", history["train_acc"][-1])
     print("Final validation accuracy:", history["val_acc"][-1])
+
+# TODO: validation accuracy is pretty low so far.
+# i'll implement a larger validation set
