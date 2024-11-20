@@ -40,20 +40,22 @@ class SignalCNN(nn.Module):
         super(SignalCNN, self).__init__()
         # first convolutional layer: 1 input channel -> 16 output channels
         # convolutional layers scan through the signal looking for patterns
-        self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
+        self.conv1 = nn.Conv1d(1, 8, kernel_size=3)
         # conv1d is a 1D convolutional layer
         # data is 1d because it's a time series
         # eeg/ecg/etc
         # second convolutional layer: 16 input channels -> 32 output channels
-        self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
+        # halfed to 8 to prevent overfitting
+        self.conv2 = nn.Conv1d(8, 16, kernel_size=3)
         # MaxPooling layer with kernel size 2
         # reduces the number of features in the signal
         self.pool = nn.MaxPool1d(2)
         # dropout layers for regularization
         # prevents overfitting
-        self.dropout1 = nn.Dropout(0.3)
-        self.dropout2 = nn.Dropout(0.3)
-        # turning off a random 30% of the neurons during training
+        self.dropout1 = nn.Dropout(0.5)
+        self.dropout2 = nn.Dropout(0.5)
+        # turning off a random 50% of the neurons during training
+        # raised from 0.3 to 0.5 to prevent overfitting
 
         # calculate the size of flattened features dynamically
         # this ensures the model works with different input sizes
@@ -74,8 +76,9 @@ class SignalCNN(nn.Module):
             flat_features = x.shape[1]
 
         # Fully connected layers
-        self.fc1 = nn.Linear(flat_features, 32)
-        self.fc2 = nn.Linear(32, 1)
+        self.fc1 = nn.Linear(flat_features, 16)
+        self.fc2 = nn.Linear(16, 1)
+        # reduced to 16 to prevent overfitting
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -163,7 +166,7 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
         X_data, y_labels, sampling_rate, window_size
     )
 
-    # Split into train/test sets
+    # initial train/test sets
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,
         y_processed,
@@ -176,11 +179,26 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
         # e.g. 30% 1, 70% 0
     )
 
+    # split train test into train/validation
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train,
+        y_train,
+        test_size=0.25,  # 20% of TOTAL data is used for validation
+        random_state=42,  # seed for reproducibility
+        shuffle=True,  # shuffle the data before splitting
+        stratify=y_train,  # Added stratification to maintain class distribution
+        # we need to maintain the same distribution of classes
+        # class distributoin = number of occurences of each class
+        # e.g. 30% 1, 70% 0
+    )
+
     # Print data shapes and class distribution
     print(f"Training data shape: {X_train.shape}")
+    print(f"validation data shape: {X_val.shape}")
     print(f"Testing data shape: {X_test.shape}")
-    # the 2 lines above might show an error but they work
+    # the 3 lines above might show an error but they work
     print(f"Training labels distribution: {np.bincount(y_train)}")
+    print(f"validation labels distribution: {np.bincount(y_val)}")
     print(f"Testing labels distribution: {np.bincount(y_test)}")
 
     # Create data loaders
@@ -188,24 +206,40 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     # DataLoader is a class that loads data in batches
     # it's used to improve training speed
+    val_dataset = SignalDataset(X_val, y_val)
+    val_loader = DataLoader(val_dataset, batch_size=16)
     test_dataset = SignalDataset(X_test, y_test)
     test_loader = DataLoader(test_dataset, batch_size=16)
 
     # Initialize model, loss function, and optimizer
     model = SignalCNN(window_size).to(device)
+    # creating the model, pushing it to whatever "device" is
+    # metal if mac, cuda if gpu, else cpu
     criterion = nn.BCELoss()
+    # binary-cross entropy loss function
+    # used for binary classification
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    # adam optimizer
+    # lr = learning rate
+    # weight decay = prevents overfitting, small penalty for large weights
 
     print("Model created")
     print(model)
 
     # Training loop parameters
-    epochs = 30
+    epochs = 50
     best_val_acc = 0
-    patience = 5  # number of epochs to wait for improvement
+    patience = 10  # number of epochs to wait for improvement
     # stops training if no improvement after this many epochs
     patience_counter = 0
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=5,
+    )
 
     # Training loop
     for epoch in range(epochs):
@@ -246,7 +280,8 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
         total = 0
 
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for inputs, labels in val_loader:
+                # for each batch in validation set
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels.unsqueeze(1))
@@ -255,7 +290,7 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
                 total += labels.size(0)
                 correct += (predicted.squeeze() == labels).sum().item()
 
-        val_loss = val_loss / len(test_loader)
+        val_loss = val_loss / len(val_loader)
         val_acc = 100 * correct / total
 
         # Early stopping logic
@@ -280,6 +315,8 @@ def train_signal_model(X_data, y_labels, window_size=1000, sampling_rate=250):
             f"Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, "
             f"Val Acc: {val_acc:.2f}%"
         )
+
+        scheduler.step(val_loss)
 
     return model, history
 
@@ -321,7 +358,7 @@ if __name__ == "__main__":
     print("Starting the program...")
 
     # Create synthetic data with structure
-    signal_length = 1000000
+    signal_length = 100000
     t = np.linspace(0, 10, signal_length)
     # Generate signal: sine wave + noise
     X_dummy = np.sin(2 * np.pi * t) + np.random.normal(0, 0.5, signal_length)
@@ -344,6 +381,3 @@ if __name__ == "__main__":
     print("\nTraining History:")
     print("Final training accuracy:", history["train_acc"][-1])
     print("Final validation accuracy:", history["val_acc"][-1])
-
-# TODO: validation accuracy is pretty low so far.
-# i'll implement a larger validation set
