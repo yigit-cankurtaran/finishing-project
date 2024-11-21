@@ -6,6 +6,19 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 
+# datasetler var ama eeg ekg nedir biraz daha derine in
+# neyi eğitiyoruz niye eğitiyoruz
+# ekg datası daha faydalı olur
+# bu dönem ekg bakarız sonraki dönem eeg
+# sinyal benzerliğine bak
+# ekg sinyali her değere label koymak yerine
+# belirli range'ler arasında 1 diğer range'ler arası 0 tarzı yap
+# ekg dalgaları labellamak istersek bu daha mantıklı
+# nöronları yükselt aralarındaki bağlantıyı azalt
+# pqrst dalgası
+# basit bir sinüs sinyali olduğundan overfitting olabilir
+# ekg kendi datasetinde noise gerek olmayabilir
+
 
 class SignalDataset(Dataset):
     """Custom Dataset for signal data
@@ -118,6 +131,8 @@ def preprocess_signal_data(data, labels, sampling_rate, window_size=1000):
     # take segments of the signal with overlap
     # each window shares 50% of its data with the next window
     # this is to prevent the model from learning the same features
+    #
+    # ekg sinyalinin periyoduna göre örnek sayılarını tespit etmemiz gerekir
     for i in range(0, len(data) - window_size, window_size // 2):
         segment = data[i : i + window_size]
         if len(segment) == window_size:
@@ -360,8 +375,9 @@ if __name__ == "__main__":
     # Create synthetic data with structure
     signal_length = 100000
     t = np.linspace(0, 10, signal_length)
-    # Generate signal: sine wave + noise
-    X_dummy = np.sin(2 * np.pi * t) + np.random.normal(0, 0.5, signal_length)
+    # Generate signal: sine wave
+    X_dummy = np.sin(2 * np.pi * t)
+    # fixed the overfitting issue by removing the noise
     # Create labels correlated with signal
     y_dummy = (X_dummy > 0).astype(int)
 
