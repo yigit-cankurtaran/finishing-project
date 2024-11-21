@@ -375,9 +375,23 @@ if __name__ == "__main__":
     # Create synthetic data with structure
     signal_length = 100000
     t = np.linspace(0, 10, signal_length)
-    # Generate signal: sine wave
-    X_dummy = np.sin(2 * np.pi * t)
-    # fixed the overfitting issue by removing the noise
+
+    # baseline wander (things like body movement from breathing etc.)
+    low_freq = 0.3
+    baseline_wander = 0.2 * np.sin(2 * np.pi * low_freq * t)
+
+    # emg interference (muscle acitvity)
+    emg_noise = np.random.normal(0, 0.05, signal_length)
+
+    # electrode noise (noise from the sensor)
+    spike_amp = 0.5
+    num_spikes = 10
+    spike_indices = np.random.choice(signal_length, num_spikes, replace=False)
+    spike_signal = np.zeros(signal_length)
+    spike_signal[spike_indices] = np.random.normal(0, spike_amp, num_spikes)
+
+    # Generate signal: sine wave + noise
+    X_dummy = np.sin(2 * np.pi * t) + baseline_wander + emg_noise + spike_signal
     # Create labels correlated with signal
     y_dummy = (X_dummy > 0).astype(int)
 
