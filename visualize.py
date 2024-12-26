@@ -20,56 +20,50 @@ def visualize_ecg_predictions(record_path, model, window_size=250):
     # Get signal data (first lead)
     signal = record.p_signal.T[0]
 
-    # Get predictions from model
+    # Get predictions and print range for debugging
     predictions = predict_signal(model, signal)
+    print(f"Prediction range: {predictions.min():.4f} to {predictions.max():.4f}")
+    print(f"Number of abnormal predictions: {(predictions > 0.5).sum()}")
 
-    # Create figure with subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
+    # Create figure
+    fig, ax = plt.subplots(figsize=(15, 6))
 
-    # Plot original signal with annotations
-    time = np.arange(len(signal)) / record.fs  # Convert to seconds
-    ax1.plot(time, signal, "b-", label="ECG Signal", alpha=0.6)
+    # Plot original signal
+    time = np.arange(len(signal)) / record.fs
+    ax.plot(time, signal, "b-", label="ECG Signal", alpha=0.6)
 
-    # Plot ground truth annotations
+    # Plot ground truth annotations in red
     abnormal_types = ["V", "A", "L", "R", "F", "f", "j", "a", "S", "E", "J"]
     for sample, symbol in zip(annotations.sample, annotations.symbol):
         if sample < len(signal) and symbol in abnormal_types:
-            ax1.axvline(x=sample / record.fs, color="r", alpha=0.3)
+            ax.axvline(
+                x=sample / record.fs,
+                color="red",
+                alpha=0.4,
+                label="Ground Truth" if sample == annotations.sample[0] else "",
+            )
 
-    # Plot predictions
-    # Resize predictions to match signal length
+    # Plot model predictions in green with higher visibility
     pred_time = np.linspace(0, len(signal) / record.fs, len(predictions))
-    ax2.plot(
-        pred_time, predictions.squeeze(), "g-", label="Model Confidence", alpha=0.7
-    )
-    ax2.axhline(y=0.5, color="r", linestyle="--", label="Detection Threshold")
-
-    # Highlight regions where model predicts abnormality
     predictions_resized = np.interp(time, pred_time, predictions.squeeze())
     abnormal_regions = predictions_resized > 0.5
-    ax1.fill_between(
+
+    # Make predictions more visible
+    ax.fill_between(
         time,
         signal.min(),
         signal.max(),
         where=abnormal_regions,
-        color="yellow",
-        alpha=0.2,
-        label="Model-detected Abnormality",
+        color="lime",
+        alpha=0.4,
+        label="Model Predictions",
     )
 
-    # Customize plots
-    ax1.set_title(
-        "ECG Signal (Blue) with Ground Truth Annotations (Red) and Model Predictions (Yellow)"
-    )
-    ax1.set_ylabel("Amplitude")
-    ax1.grid(True)
-    ax1.legend()
-
-    ax2.set_title("Model Prediction Confidence")
-    ax2.set_xlabel("Time (seconds)")
-    ax2.set_ylabel("Abnormality Confidence")
-    ax2.grid(True)
-    ax2.legend()
+    ax.set_title("ECG Signal Analysis")
+    ax.set_xlabel("Time (seconds)")
+    ax.set_ylabel("Amplitude")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
 
     plt.tight_layout()
     plt.show()
@@ -97,6 +91,18 @@ if __name__ == "__main__":
     # Load the saved state dictionary
     model.load_state_dict(torch.load("best_model.pth"))
     model.eval()
+
+    # Verify model loaded correctly
+    print("Model architecture:", model)
+    print("Number of parameters:", sum(p.numel() for p in model.parameters()))
+
+    # Test model with random input
+    test_input = torch.randn(1, window_size).to(device)
+    with torch.no_grad():
+        test_output = model(test_input)
+        print(
+            f"Test output range: {test_output.min().item():.4f} to {test_output.max().item():.4f}"
+        )
 
     # Visualize the data and predictions
     visualize_ecg_predictions(record_path, model)

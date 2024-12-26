@@ -379,7 +379,6 @@ if __name__ == "__main__":
     ]
 
     print(f"Found {len(record_paths)} records")
-
     # load and process data
     X_data, y_labels = load_mitbih_data(record_paths)
 
