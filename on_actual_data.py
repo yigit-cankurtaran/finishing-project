@@ -157,9 +157,16 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
     # training settings
     epochs = 50
     best_val_acc = 0
-    patience = 10
+    patience = 5  # early stopping
     patience_counter = 0
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
+
+    # try to load existing model if it exists
+    try:
+        model.load_state_dict(torch.load("best_model.pth"))
+        print("Loaded existing model, continuing training...")
+    except FileNotFoundError:
+        print("Training new model...")
 
     # training loop
     for epoch in range(epochs):
@@ -168,6 +175,8 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
         train_loss = 0.0
         correct = 0
         total = 0
+
+        print(f"Epoch {epoch+1}/{epochs}")
 
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -187,6 +196,7 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
         train_loss = train_loss / len(train_loader)
         train_acc = 100 * correct / total
+        print(f"Training - Loss: {train_loss:.4f}, Accuracy: {train_acc:.2f}%")
 
         # validation phase
         model.eval()
@@ -226,6 +236,24 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
         history["val_acc"].append(val_acc)
         scheduler.step(val_loss)
 
+    # after training, evaluate on test set
+    test_dataset = SignalDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=16)
+    model.eval()
+    test_correct = 0
+    test_total = 0
+
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            predicted = (outputs.data > 0.5).float()
+            test_total += labels.size(0)
+            test_correct += (predicted.squeeze() == labels).sum().item()
+
+    test_acc = 100 * test_correct / test_total
+    print(f"\nFinal Test Accuracy: {test_acc:.2f}%")
+
     # load best model
     model.load_state_dict(torch.load("best_model.pth"))
     return model, history
@@ -254,19 +282,40 @@ def predict_signal(model, new_data, window_size=250, sampling_rate=360):
 
 # main execution block
 if __name__ == "__main__":
-    # download and prepare data
-    wfdb.dl_database("mitdb", dl_dir="data")
-    record_paths = ["data/100", "data/101", "data/102"]
+    # check if data directory exists
+    import os
+
+    data_dir = "data"
+
+    if not os.path.exists(data_dir) or not os.listdir(data_dir):
+        print("Downloading MIT-BIH database...")
+        wfdb.dl_database("mitdb", dl_dir="data")
+    else:
+        print("Found existing MIT-BIH database")
+
+    # get all record paths (MIT-BIH has 48 records numbered 100-234)
+    record_paths = [
+        f"data/{str(i)}"
+        for i in range(100, 235)
+        if os.path.exists(f"data/{str(i)}.dat")
+    ]
+
+    print(f"Found {len(record_paths)} records")
+
+    # load and process data
     X_data, y_labels = load_mitbih_data(record_paths)
 
-    print(f"loaded data shape: {X_data.shape}")
-    print(f"labels shape: {y_labels.shape}")
+    print(f"Loaded data shape: {X_data.shape}")
+    print(f"Labels shape: {y_labels.shape}")
 
     # train model
     model, history = train_signal_model(X_data, y_labels)
 
-    # test on new data
-    test_record = wfdb.rdrecord("data/103")
+    # test on new data (use first unseen record)
+    test_record_num = next(
+        i for i in range(100, 235) if f"data/{i}" not in record_paths
+    )
+    test_record = wfdb.rdrecord(f"data/{test_record_num}")
     test_signal = test_record.p_signal.T[0]
     predictions = predict_signal(model, test_signal)
-    print(f"predictions shape: {predictions.shape}")
+    print(f"Predictions shape: {predictions.shape}")
