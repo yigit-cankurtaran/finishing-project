@@ -6,19 +6,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 
-# datasetler var ama eeg ekg nedir biraz daha derine in
-# neyi eğitiyoruz niye eğitiyoruz
-# ekg datası daha faydalı olur
-# bu dönem ekg bakarız sonraki dönem eeg
-# sinyal benzerliğine bak
-# ekg sinyali her değere label koymak yerine
-# belirli range'ler arasında 1 diğer range'ler arası 0 tarzı yap
-# ekg dalgaları labellamak istersek bu daha mantıklı
-# nöronları yükselt aralarındaki bağlantıyı azalt
-# pqrst dalgası
-# basit bir sinüs sinyali olduğundan overfitting olabilir
-# ekg kendi datasetinde noise gerek olmayabilir
-
 
 class SignalDataset(Dataset):
     """Custom Dataset for signal data
