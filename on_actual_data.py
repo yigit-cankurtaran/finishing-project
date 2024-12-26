@@ -6,14 +6,15 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import wfdb  # waveform database
+import device_func
 
 
 # custom dataset class to handle ecg data
 # converts numpy arrays to pytorch tensors for training
 class SignalDataset(Dataset):
     def __init__(self, data, labels):
-        self.data = torch.FloatTensor(data)
-        self.labels = torch.FloatTensor(labels)
+        self.data = torch.tensor(data, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.float32)
 
     def __len__(self):
         return len(self.data)
@@ -27,17 +28,12 @@ class SignalDataset(Dataset):
 class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
-        # first conv layer: input -> 8 channels
         self.conv1 = nn.Conv1d(1, 8, kernel_size=3)
-        # second conv layer: 8 -> 16 channels
         self.conv2 = nn.Conv1d(8, 16, kernel_size=3)
-        # pooling layer to reduce dimensions
         self.pool = nn.MaxPool1d(2)
-        # dropout layers to prevent overfitting
         self.dropout1 = nn.Dropout(0.5)
         self.dropout2 = nn.Dropout(0.5)
 
-        # calculate size of flattened features
         with torch.no_grad():
             x = torch.randn(1, 1, input_shape)
             x = self.pool(torch.relu(self.conv1(x)))
@@ -47,26 +43,19 @@ class SignalCNN(nn.Module):
             x = x.flatten(1)
             flat_features = x.shape[1]
 
-        # fully connected layers for final classification
         self.fc1 = nn.Linear(flat_features, 16)
         self.fc2 = nn.Linear(16, 1)
-        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # add channel dimension for conv1d
         x = x.unsqueeze(1)
-        # first conv block
         x = self.pool(torch.relu(self.conv1(x)))
         x = self.dropout1(x)
-        # second conv block
         x = self.pool(torch.relu(self.conv2(x)))
         x = self.dropout2(x)
-        # flatten and feed through dense layers
         x = x.flatten(1)
         x = torch.relu(self.fc1(x))
         x = self.fc2(x)
-        x = self.sigmoid(x)
-        return x
+        return x  # Return logits
 
 
 # loads ecg data from mit-bih database
@@ -122,15 +111,22 @@ def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
 
 # trains the model on preprocessed data
 def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
-    # set up device (gpu/cpu)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
+    device = device_func.device_func()
+    print(f"Training on {device}")
+
+    # Ensure inputs are properly scaled
+    X_data = X_data.astype(np.float32)
+    y_labels = y_labels.astype(np.float32)
 
     # preprocess data
     X_processed, y_processed = preprocess_signal_data(
         X_data, y_labels, sampling_rate, window_size
     )
+
+    # Add checks for NaN values
+    if np.isnan(X_processed).any():
+        print("Warning: NaN values in processed data")
+        X_processed = np.nan_to_num(X_processed)
 
     # split into train/val/test sets
     X_train, X_test, y_train, y_test = train_test_split(
@@ -146,13 +142,26 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
     val_dataset = SignalDataset(X_val, y_val)
     val_loader = DataLoader(val_dataset, batch_size=16)
 
-    # initialize model and training components
+    # Modified model initialization and loss setup
     model = SignalCNN(window_size).to(device)
-    criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5
+
+    # Safer weight calculation
+    num_negative = float((y_processed == 0).sum())
+    num_positive = max(float((y_processed == 1).sum()), 1e-8)
+    pos_weight = torch.tensor([num_negative / num_positive], dtype=torch.float32).to(
+        device
     )
+
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+
+    # Add scheduler definition here
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+    )
+
+    # Add gradient clipping
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     # training settings
     epochs = 50
@@ -183,9 +192,24 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
             # forward pass
             optimizer.zero_grad()
             outputs = model(inputs)
+
+            # Check for NaN
+            if torch.isnan(outputs).any():
+                print("Warning: NaN in model outputs")
+                continue
+
             loss = criterion(outputs, labels.unsqueeze(1))
-            # backward pass
+
+            # Skip bad batches
+            if torch.isnan(loss):
+                print("Warning: NaN loss encountered")
+                continue
+
             loss.backward()
+
+            # Clip gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
             # calculate metrics
@@ -261,9 +285,10 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
 # makes predictions on new data
 def predict_signal(model, new_data, window_size=250, sampling_rate=360):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
+    device = device_func.device_func()
+    print(f"Predicting on {device}")
+    model = model.to(device)
+    model.eval()
 
     # preprocess new data
     dummy_labels = np.zeros(len(new_data))
@@ -271,13 +296,16 @@ def predict_signal(model, new_data, window_size=250, sampling_rate=360):
         new_data, dummy_labels, sampling_rate, window_size
     )
 
-    # run predictions
-    model.eval()
-    processed_tensor = torch.FloatTensor(processed_data).to(device)
+    # run predictions in batches
+    predictions = []
+    batch_size = 32
     with torch.no_grad():
-        predictions = model(processed_tensor)
+        for i in range(0, len(processed_data), batch_size):
+            batch = torch.FloatTensor(processed_data[i : i + batch_size]).to(device)
+            batch_preds = torch.sigmoid(model(batch))  # Apply sigmoid here
+            predictions.append(batch_preds.cpu().numpy())
 
-    return predictions.cpu().numpy()
+    return np.concatenate(predictions)
 
 
 # main execution block
@@ -293,17 +321,71 @@ if __name__ == "__main__":
     else:
         print("Found existing MIT-BIH database")
 
-    # get all record paths (MIT-BIH has 48 records numbered 100-234)
+    # Actual MIT-BIH record numbers
+    record_numbers = [
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        121,
+        122,
+        123,
+        124,
+        200,
+        201,
+        202,
+        203,
+        205,
+        207,
+        208,
+        209,
+        210,
+        212,
+        213,
+        214,
+        215,
+        217,
+        219,
+        220,
+        221,
+        222,
+        223,
+        228,
+        230,
+        231,
+        232,
+        233,
+        234,
+    ]
+
+    # Get record paths
     record_paths = [
-        f"data/{str(i)}"
-        for i in range(100, 235)
-        if os.path.exists(f"data/{str(i)}.dat")
+        f"data/{str(i)}" for i in record_numbers if os.path.exists(f"data/{str(i)}.dat")
     ]
 
     print(f"Found {len(record_paths)} records")
 
     # load and process data
     X_data, y_labels = load_mitbih_data(record_paths)
+
+    # Convert to float32
+    X_data = X_data.astype(np.float32)
+    y_labels = y_labels.astype(np.float32)
 
     print(f"Loaded data shape: {X_data.shape}")
     print(f"Labels shape: {y_labels.shape}")
@@ -316,6 +398,6 @@ if __name__ == "__main__":
         i for i in range(100, 235) if f"data/{i}" not in record_paths
     )
     test_record = wfdb.rdrecord(f"data/{test_record_num}")
-    test_signal = test_record.p_signal.T[0]
+    test_signal = test_record.p_signal.T[0].astype(np.float32)  # Convert to float32
     predictions = predict_signal(model, test_signal)
     print(f"Predictions shape: {predictions.shape}")
