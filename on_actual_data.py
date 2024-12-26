@@ -28,34 +28,52 @@ class SignalDataset(Dataset):
 class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
-        self.conv1 = nn.Conv1d(1, 8, kernel_size=3)
-        self.conv2 = nn.Conv1d(8, 16, kernel_size=3)
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
+        self.bn1 = nn.BatchNorm1d(16)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
+        self.bn2 = nn.BatchNorm1d(32)
         self.pool = nn.MaxPool1d(2)
-        self.dropout1 = nn.Dropout(0.5)
-        self.dropout2 = nn.Dropout(0.5)
+        self.dropout1 = nn.Dropout(0.3)
+        self.dropout2 = nn.Dropout(0.3)
 
+        # Calculate flat features
         with torch.no_grad():
             x = torch.randn(1, 1, input_shape)
-            x = self.pool(torch.relu(self.conv1(x)))
+            x = self.pool(torch.relu(self.bn1(self.conv1(x))))
             x = self.dropout1(x)
-            x = self.pool(torch.relu(self.conv2(x)))
+            x = self.pool(torch.relu(self.bn2(self.conv2(x))))
             x = self.dropout2(x)
             x = x.flatten(1)
             flat_features = x.shape[1]
 
-        self.fc1 = nn.Linear(flat_features, 16)
-        self.fc2 = nn.Linear(16, 1)
+        self.fc1 = nn.Linear(flat_features, 64)
+        self.fc2 = nn.Linear(64, 1)
+        self.sigmoid = nn.Sigmoid()
+
+        # Initialize weights
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         x = x.unsqueeze(1)
-        x = self.pool(torch.relu(self.conv1(x)))
+        x = self.pool(torch.relu(self.bn1(self.conv1(x))))
         x = self.dropout1(x)
-        x = self.pool(torch.relu(self.conv2(x)))
+        x = self.pool(torch.relu(self.bn2(self.conv2(x))))
         x = self.dropout2(x)
         x = x.flatten(1)
         x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x  # Return logits
+        x = self.sigmoid(self.fc2(x))
+        return x
 
 
 # loads ecg data from mit-bih database
@@ -144,16 +162,8 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
     # Modified model initialization and loss setup
     model = SignalCNN(window_size).to(device)
-
-    # Safer weight calculation
-    num_negative = float((y_processed == 0).sum())
-    num_positive = max(float((y_processed == 1).sum()), 1e-8)
-    pos_weight = torch.tensor([num_negative / num_positive], dtype=torch.float32).to(
-        device
-    )
-
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    criterion = nn.BCELoss()  # Changed from BCEWithLogitsLoss
+    optimizer = optim.Adam(model.parameters(), lr=0.0003)  # Reduced learning rate
 
     # Add scheduler definition here
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -179,7 +189,6 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
     # training loop
     for epoch in range(epochs):
-        # training phase
         model.train()
         train_loss = 0.0
         correct = 0
@@ -187,29 +196,23 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
         print(f"Epoch {epoch+1}/{epochs}")
 
-        for inputs, labels in train_loader:
+        for batch_idx, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
-            # forward pass
             optimizer.zero_grad()
             outputs = model(inputs)
-
-            # Check for NaN
-            if torch.isnan(outputs).any():
-                print("Warning: NaN in model outputs")
-                continue
-
             loss = criterion(outputs, labels.unsqueeze(1))
-
-            # Skip bad batches
-            if torch.isnan(loss):
-                print("Warning: NaN loss encountered")
-                continue
-
             loss.backward()
+
+            # Print gradient info after backward pass
+            if epoch == 0 and batch_idx == 0:
+                for name, param in model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        print(
+                            f"{name} grad range: {param.grad.min():.5f} to {param.grad.max():.5f}"
+                        )
 
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
             optimizer.step()
 
             # calculate metrics
