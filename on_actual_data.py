@@ -28,35 +28,34 @@ class SignalDataset(Dataset):
 class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
-        self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
-        self.bn1 = nn.BatchNorm1d(16)
-        self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
-        self.bn2 = nn.BatchNorm1d(32)
+        self.conv1 = nn.Conv1d(1, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(32)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(64)
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(128)
         self.pool = nn.MaxPool1d(2)
-        self.dropout1 = nn.Dropout(0.3)
-        self.dropout2 = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.5)
 
-        # Calculate flat features
         with torch.no_grad():
             x = torch.randn(1, 1, input_shape)
             x = self.pool(torch.relu(self.bn1(self.conv1(x))))
-            x = self.dropout1(x)
             x = self.pool(torch.relu(self.bn2(self.conv2(x))))
-            x = self.dropout2(x)
+            x = self.pool(torch.relu(self.bn3(self.conv3(x))))
             x = x.flatten(1)
             flat_features = x.shape[1]
 
-        self.fc1 = nn.Linear(flat_features, 64)
-        self.fc2 = nn.Linear(64, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.fc1 = nn.Linear(flat_features, 128)
+        self.fc2 = nn.Linear(128, 1)
 
-        # Initialize weights
         self._initialize_weights()
 
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -67,12 +66,11 @@ class SignalCNN(nn.Module):
     def forward(self, x):
         x = x.unsqueeze(1)
         x = self.pool(torch.relu(self.bn1(self.conv1(x))))
-        x = self.dropout1(x)
         x = self.pool(torch.relu(self.bn2(self.conv2(x))))
-        x = self.dropout2(x)
+        x = self.pool(torch.relu(self.bn3(self.conv3(x))))
         x = x.flatten(1)
-        x = torch.relu(self.fc1(x))
-        x = self.sigmoid(self.fc2(x))
+        x = self.dropout(torch.relu(self.fc1(x)))
+        x = self.fc2(x)
         return x
 
 
@@ -133,7 +131,9 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
     print(f"Training on {device}")
 
     # Ensure inputs are properly scaled
-    X_data = X_data.astype(np.float32)
+    X_data = X_data.astype(
+        np.float32
+    )  # in case of bad data change this to torch.float32
     y_labels = y_labels.astype(np.float32)
 
     # preprocess data
@@ -162,8 +162,11 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
     # Modified model initialization and loss setup
     model = SignalCNN(window_size).to(device)
-    criterion = nn.BCELoss()  # Changed from BCEWithLogitsLoss
-    optimizer = optim.Adam(model.parameters(), lr=0.0003)  # Reduced learning rate
+    criterion = nn.BCEWithLogitsLoss()  # Use logits-based loss
+    optimizer = optim.Adam(
+        model.parameters(), lr=0.0003, weight_decay=1e-5
+    )  # less learning rate + weight decay
+    # preventing overfiting
 
     # Add scheduler definition here
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -217,7 +220,7 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
 
             # calculate metrics
             train_loss += loss.item()
-            predicted = (outputs.data > 0.5).float()
+            predicted = (torch.sigmoid(outputs).data > 0.5).float()
             total += labels.size(0)
             correct += (predicted.squeeze() == labels).sum().item()
 
@@ -237,7 +240,7 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels.unsqueeze(1))
                 val_loss += loss.item()
-                predicted = (outputs.data > 0.5).float()
+                predicted = (torch.sigmoid(outputs).data > 0.5).float()
                 total += labels.size(0)
                 correct += (predicted.squeeze() == labels).sum().item()
 
@@ -274,7 +277,7 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
         for inputs, labels in test_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
-            predicted = (outputs.data > 0.5).float()
+            predicted = (torch.sigmoid(outputs).data > 0.5).float()
             test_total += labels.size(0)
             test_correct += (predicted.squeeze() == labels).sum().item()
 
@@ -396,9 +399,7 @@ if __name__ == "__main__":
     model, history = train_signal_model(X_data, y_labels)
 
     # test on new data (use first unseen record)
-    test_record_num = next(
-        i for i in range(100, 235) if f"data/{i}" not in record_paths
-    )
+    test_record_num = next(i for i in record_numbers if f"data/{i}" not in record_paths)
     test_record = wfdb.rdrecord(f"data/{test_record_num}")
     test_signal = test_record.p_signal.T[0].astype(np.float32)  # Convert to float32
     predictions = predict_signal(model, test_signal)
