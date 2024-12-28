@@ -275,6 +275,59 @@ def train_and_evaluate():
     return model
 
 
+def predict_signal(
+    signal_data, model_path="best_model.pth", window_size=250, threshold=0.5
+):
+    """
+    Predict abnormalities in ECG signal using sliding windows.
+    Returns indices of abnormal regions with confidence scores.
+    """
+    device = device_func.device_func()
+
+    # Load and prepare model
+    model = SignalCNN(window_size).to(device)
+    model.load_state_dict(torch.load(model_path))
+    model.eval()
+
+    # Normalize signal
+    scaler = StandardScaler()
+    signal_data = scaler.fit_transform(signal_data.reshape(-1, 1)).flatten()
+
+    # Analyze signal with sliding windows
+    abnormal_regions = []
+    stride = window_size // 2
+
+    with torch.no_grad():
+        for i in range(0, len(signal_data) - window_size + 1, stride):
+            window = signal_data[i : i + window_size]
+            window_tensor = torch.tensor(window, dtype=torch.float32).to(device)
+            output = model(window_tensor.unsqueeze(0))
+            probability = torch.sigmoid(output).item()
+
+            if probability > threshold:
+                abnormal_regions.append(
+                    {
+                        "start_idx": i,
+                        "end_idx": i + window_size,
+                        "confidence": probability,
+                    }
+                )
+
+    return abnormal_regions
+
+
 if __name__ == "__main__":
+    # Load test data
+    test_df = pd.read_csv("data/mitbih_test.csv")
+    signal = test_df.values[:, :-1].astype(np.float32)[0]  # First signal
+
+    # Train model if needed
     model = train_and_evaluate()
     torch.save(model.state_dict(), "final_model.pth")
+
+    # Test prediction
+    abnormal_regions = predict_signal(signal)
+    print("\nAbnormal Regions Detected:")
+    for region in abnormal_regions:
+        print(f"Region from {region['start_idx']} to {region['end_idx']}")
+        print(f"Confidence: {region['confidence']:.2f}")
