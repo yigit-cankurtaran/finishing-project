@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -8,8 +9,6 @@ from sklearn.preprocessing import StandardScaler
 import device_func
 
 
-# custom dataset class to handle ecg data
-# converts numpy arrays to pytorch tensors for training
 class SignalDataset(Dataset):
     def __init__(self, data, labels):
         self.data = torch.tensor(data, dtype=torch.float32)
@@ -27,7 +26,9 @@ class SignalDataset(Dataset):
 class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
-        self.conv1 = nn.Conv1d(1, 32, kernel_size=3, padding=1)
+        print(f"Initializing CNN with input shape: {input_shape}")
+
+        self.conv1 = nn.Conv1d(1, 32, kernel_size=5, stride=1, padding=2)
         self.bn1 = nn.BatchNorm1d(32)
         self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm1d(64)
@@ -36,11 +37,20 @@ class SignalCNN(nn.Module):
         self.pool = nn.MaxPool1d(2)
         self.dropout = nn.Dropout(0.5)
 
+        # Calculate output shape
         with torch.no_grad():
             x = torch.randn(1, 1, input_shape)
+            print(f"Initial x shape: {x.shape}")
+
             x = self.pool(torch.relu(self.bn1(self.conv1(x))))
+            print(f"After conv1: {x.shape}")
+
             x = self.pool(torch.relu(self.bn2(self.conv2(x))))
+            print(f"After conv2: {x.shape}")
+
             x = self.pool(torch.relu(self.bn3(self.conv3(x))))
+            print(f"After conv3: {x.shape}")
+
             x = x.flatten(1)
             flat_features = x.shape[1]
 
@@ -73,31 +83,6 @@ class SignalCNN(nn.Module):
         return x
 
 
-# loads ecg data from mit-bih database
-def load_mitbih_data(record_paths):
-    all_signals = []
-    all_labels = []
-
-    for path in record_paths:
-        # load signal data
-        record = wfdb.rdrecord(path)
-        signals = record.p_signal.T[0]  # get first lead only
-
-        # load annotations (labels)
-        annotations = wfdb.rdann(path, "atr")
-
-        # create binary labels array
-        labels = np.zeros(len(signals))
-        for sample in annotations.sample:
-            if sample < len(signals):
-                labels[sample] = 1
-
-        all_signals.append(signals)
-        all_labels.append(labels)
-
-    return np.concatenate(all_signals), np.concatenate(all_labels)
-
-
 # splits signal into overlapping windows and normalizes
 def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
     segments = []
@@ -124,114 +109,65 @@ def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
     return segments_scaled, segment_labels
 
 
-# trains the model on preprocessed data
-def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
+def train_signal_model(X_data, y_labels, window_size=250):
     device = device_func.device_func()
     print(f"Training on {device}")
 
-    # Ensure inputs are properly scaled
-    X_data = X_data.astype(
-        np.float32
-    )  # in case of bad data change this to torch.float32
-    y_labels = y_labels.astype(np.float32)
-
-    # preprocess data
-    X_processed, y_processed = preprocess_signal_data(
-        X_data, y_labels, sampling_rate, window_size
-    )
-
-    # Add checks for NaN values
-    if np.isnan(X_processed).any():
-        print("Warning: NaN values in processed data")
-        X_processed = np.nan_to_num(X_processed)
-
-    # split into train/val/test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_processed, y_processed, test_size=0.2, random_state=42, stratify=y_processed
-    )
+    # Split into train/val sets
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.25, random_state=42, stratify=y_train
+        X_data, y_labels, test_size=0.2, random_state=42, stratify=y_labels
     )
 
-    # create data loaders
+    # Create data loaders with larger batch size for bigger dataset
     train_dataset = SignalDataset(X_train, y_train)
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_dataset = SignalDataset(X_val, y_val)
-    val_loader = DataLoader(val_dataset, batch_size=16)
+    val_loader = DataLoader(val_dataset, batch_size=32)
 
-    # Modified model initialization and loss setup
     model = SignalCNN(window_size).to(device)
-    criterion = nn.BCEWithLogitsLoss()  # Use logits-based loss
-    optimizer = optim.Adam(
-        model.parameters(), lr=0.0003, weight_decay=1e-5
-    )  # less learning rate + weight decay
-    # preventing overfiting
-
-    # Add scheduler definition here
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        optimizer, patience=3, verbose=True
     )
 
-    # Add gradient clipping
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-    # training settings
-    epochs = 50
+    epochs = 30
     best_val_acc = 0
-    patience = 5  # early stopping
+    patience = 7
     patience_counter = 0
-    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
 
-    # try to load existing model if it exists
     try:
         model.load_state_dict(torch.load("best_model.pth"))
-        print("Loaded existing model, continuing training...")
+        print("Loaded existing model")
     except FileNotFoundError:
-        print("Training new model...")
+        print("Training new model")
 
-    # training loop
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
-        correct = 0
-        total = 0
+        train_correct = 0
+        train_total = 0
 
-        print(f"Epoch {epoch+1}/{epochs}")
-
-        for batch_idx, (inputs, labels) in enumerate(train_loader):
+        for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels.unsqueeze(1))
             loss.backward()
-
-            # Print gradient info after backward pass
-            if epoch == 0 and batch_idx == 0:
-                for name, param in model.named_parameters():
-                    if param.requires_grad and param.grad is not None:
-                        print(
-                            f"{name} grad range: {param.grad.min():.5f} to {param.grad.max():.5f}"
-                        )
-
-            # Clip gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            # calculate metrics
             train_loss += loss.item()
-            predicted = (torch.sigmoid(outputs).data > 0.5).float()
-            total += labels.size(0)
-            correct += (predicted.squeeze() == labels).sum().item()
+            predicted = (torch.sigmoid(outputs) > 0.5).float()
+            train_total += labels.size(0)
+            train_correct += (predicted.squeeze() == labels).sum().item()
 
-        train_loss = train_loss / len(train_loader)
-        train_acc = 100 * correct / total
-        print(f"Training - Loss: {train_loss:.4f}, Accuracy: {train_acc:.2f}%")
+        train_acc = 100 * train_correct / train_total
 
-        # validation phase
+        # Validation
         model.eval()
         val_loss = 0.0
-        correct = 0
-        total = 0
+        val_correct = 0
+        val_total = 0
 
         with torch.no_grad():
             for inputs, labels in val_loader:
@@ -239,167 +175,106 @@ def train_signal_model(X_data, y_labels, window_size=250, sampling_rate=360):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels.unsqueeze(1))
                 val_loss += loss.item()
-                predicted = (torch.sigmoid(outputs).data > 0.5).float()
-                total += labels.size(0)
-                correct += (predicted.squeeze() == labels).sum().item()
+                predicted = (torch.sigmoid(outputs) > 0.5).float()
+                val_total += labels.size(0)
+                val_correct += (predicted.squeeze() == labels).sum().item()
 
-        val_loss = val_loss / len(val_loader)
-        val_acc = 100 * correct / total
+        val_acc = 100 * val_correct / val_total
+        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
 
-        # save best model and check early stopping
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "best_model.pth")  # pth = pytorch extension
+            torch.save(model.state_dict(), "best_model.pth")
             patience_counter = 0
         else:
             patience_counter += 1
 
         if patience_counter >= patience:
-            print(f"early stopping triggered at epoch {epoch+1}")
+            print("Early stopping triggered")
             break
 
-        # save history and update scheduler
-        history["train_loss"].append(train_loss)
-        history["train_acc"].append(train_acc)
-        history["val_loss"].append(val_loss)
-        history["val_acc"].append(val_acc)
         scheduler.step(val_loss)
 
-    # after training, evaluate on test set
-    test_dataset = SignalDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=16)
-    model.eval()
-    test_correct = 0
-    test_total = 0
-
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            predicted = (torch.sigmoid(outputs).data > 0.5).float()
-            test_total += labels.size(0)
-            test_correct += (predicted.squeeze() == labels).sum().item()
-
-    test_acc = 100 * test_correct / test_total
-    print(f"\nFinal Test Accuracy: {test_acc:.2f}%")
-
-    # load best model
     model.load_state_dict(torch.load("best_model.pth"))
-    return model, history
+    return model
 
 
-# makes predictions on new data
-def predict_signal(model, new_data, window_size=250, sampling_rate=360):
+def train_and_evaluate():
     device = device_func.device_func()
-    print(f"Predicting on {device}")
-    model = model.to(device)
-    model.eval()
+    print(f"Training on {device}")
 
-    # preprocess new data
-    dummy_labels = np.zeros(len(new_data))
-    processed_data, _ = preprocess_signal_data(
-        new_data, dummy_labels, sampling_rate, window_size
-    )
+    # Load MITBIH datasets
+    train_df = pd.read_csv("data/mitbih_train.csv")
+    test_df = pd.read_csv("data/mitbih_test.csv")
 
-    # run predictions in batches
-    predictions = []
-    batch_size = 32
-    with torch.no_grad():
-        for i in range(0, len(processed_data), batch_size):
-            batch = torch.FloatTensor(processed_data[i : i + batch_size]).to(device)
-            batch_preds = torch.sigmoid(model(batch))  # Apply sigmoid here
-            predictions.append(batch_preds.cpu().numpy())
+    # Prepare data
+    X_train = train_df.values[:, :-1].astype(np.float32)
+    y_train = train_df.values[:, -1].astype(np.float32)
+    X_test = test_df.values[:, :-1].astype(np.float32)
+    y_test = test_df.values[:, -1].astype(np.float32)
 
-    return np.concatenate(predictions)
+    # Create data loaders
+    train_dataset = SignalDataset(X_train, y_train)
+    test_dataset = SignalDataset(X_test, y_test)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=32)
+
+    # Initialize model and training components
+    model = SignalCNN(input_shape=X_train.shape[1]).to(device)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
+
+    # Training loop
+    epochs = 30
+    best_test_acc = 0
+
+    for epoch in range(epochs):
+        # Training
+        model.train()
+        train_correct = 0
+        train_total = 0
+
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels.unsqueeze(1))
+            loss.backward()
+            optimizer.step()
+
+            predicted = (torch.sigmoid(outputs) > 0.5).float()
+            train_total += labels.size(0)
+            train_correct += (predicted.squeeze() == labels).sum().item()
+
+        # Testing
+        model.eval()
+        test_correct = 0
+        test_total = 0
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                predicted = (torch.sigmoid(outputs) > 0.5).float()
+                test_total += labels.size(0)
+                test_correct += (predicted.squeeze() == labels).sum().item()
+
+        train_acc = 100 * train_correct / train_total
+        test_acc = 100 * test_correct / test_total
+        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
+
+        if test_acc > best_test_acc:
+            best_test_acc = test_acc
+            torch.save(model.state_dict(), "best_model.pth")
+
+        scheduler.step(1 - test_acc / 100)
+
+    return model
 
 
-# main execution block
 if __name__ == "__main__":
-    # check if data directory exists
-    import os
-
-    data_dir = "data"
-
-    if not os.path.exists(data_dir) or not os.listdir(data_dir):
-        print("Downloading MIT-BIH database...")
-        wfdb.dl_database("mitdb", dl_dir="data")
-    else:
-        print("Found existing MIT-BIH database")
-
-    # Actual MIT-BIH record numbers
-    record_numbers = [
-        100,
-        101,
-        102,
-        103,
-        104,
-        105,
-        106,
-        107,
-        108,
-        109,
-        111,
-        112,
-        113,
-        114,
-        115,
-        116,
-        117,
-        118,
-        119,
-        121,
-        122,
-        123,
-        124,
-        200,
-        201,
-        202,
-        203,
-        205,
-        207,
-        208,
-        209,
-        210,
-        212,
-        213,
-        214,
-        215,
-        217,
-        219,
-        220,
-        221,
-        222,
-        223,
-        228,
-        230,
-        231,
-        232,
-        233,
-        234,
-    ]
-
-    # Get record paths
-    record_paths = [
-        f"data/{str(i)}" for i in record_numbers if os.path.exists(f"data/{str(i)}.dat")
-    ]
-
-    print(f"Found {len(record_paths)} records")
-    # load and process data
-    X_data, y_labels = load_mitbih_data(record_paths)
-
-    # Convert to float32
-    X_data = X_data.astype(np.float32)
-    y_labels = y_labels.astype(np.float32)
-
-    print(f"Loaded data shape: {X_data.shape}")
-    print(f"Labels shape: {y_labels.shape}")
-
-    # train model
-    model, history = train_signal_model(X_data, y_labels)
-
-    # test on new data (use first unseen record)
-    test_record_num = next(i for i in record_numbers if f"data/{i}" not in record_paths)
-    test_record = wfdb.rdrecord(f"data/{test_record_num}")
-    test_signal = test_record.p_signal.T[0].astype(np.float32)  # Convert to float32
-    predictions = predict_signal(model, test_signal)
-    print(f"Predictions shape: {predictions.shape}")
+    model = train_and_evaluate()
+    torch.save(model.state_dict(), "final_model.pth")
