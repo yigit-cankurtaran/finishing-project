@@ -142,6 +142,9 @@ def train_signal_model(X_data, y_labels, window_size=250):
     except FileNotFoundError:
         print("Training new model")
 
+    train_accuracies = []
+    val_accuracies = []
+
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
@@ -162,12 +165,15 @@ def train_signal_model(X_data, y_labels, window_size=250):
             train_correct += (predicted.squeeze() == labels).sum().item()
 
         train_acc = 100 * train_correct / train_total
+        train_accuracies.append(train_acc)
 
         # Validation
         model.eval()
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+        val_acc = 100 * val_correct / val_total
+        val_accuracies.append(val_acc)
 
         with torch.no_grad():
             for inputs, labels in val_loader:
@@ -197,7 +203,7 @@ def train_signal_model(X_data, y_labels, window_size=250):
         scheduler.step(val_loss)
 
     model.load_state_dict(torch.load("best_model.pth"))
-    return model
+    return model, train_accuracies, val_accuracies
 
 
 def train_and_evaluate():
@@ -323,7 +329,6 @@ if __name__ == "__main__":
 
     # Train model if needed
     model = train_and_evaluate()
-    torch.save(model.state_dict(), "final_model.pth")
 
     # Test prediction
     abnormal_regions = predict_signal(signal)
