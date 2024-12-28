@@ -5,7 +5,6 @@ from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-import wfdb  # waveform database
 import device_func
 
 
