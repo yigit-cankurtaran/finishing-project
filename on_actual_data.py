@@ -21,8 +21,6 @@ class SignalDataset(Dataset):
         return self.data[idx], self.labels[idx]
 
 
-# neural network model for ecg analysis
-# uses 1d convolutions since ecg data is a time series
 class SignalCNN(nn.Module):
     def __init__(self, input_shape):
         super(SignalCNN, self).__init__()
@@ -37,20 +35,12 @@ class SignalCNN(nn.Module):
         self.pool = nn.MaxPool1d(2)
         self.dropout = nn.Dropout(0.5)
 
-        # Calculate output shape
+        # Calculate output shape dynamically based on input shape
         with torch.no_grad():
             x = torch.randn(1, 1, input_shape)
-            print(f"Initial x shape: {x.shape}")
-
             x = self.pool(torch.relu(self.bn1(self.conv1(x))))
-            print(f"After conv1: {x.shape}")
-
             x = self.pool(torch.relu(self.bn2(self.conv2(x))))
-            print(f"After conv2: {x.shape}")
-
             x = self.pool(torch.relu(self.bn3(self.conv3(x))))
-            print(f"After conv3: {x.shape}")
-
             x = x.flatten(1)
             flat_features = x.shape[1]
 
@@ -73,7 +63,7 @@ class SignalCNN(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = x.unsqueeze(1)
+        x = x.unsqueeze(1)  # Add channel dimension for Conv1d
         x = self.pool(torch.relu(self.bn1(self.conv1(x))))
         x = self.pool(torch.relu(self.bn2(self.conv2(x))))
         x = self.pool(torch.relu(self.bn3(self.conv3(x))))
@@ -83,24 +73,21 @@ class SignalCNN(nn.Module):
         return x
 
 
-# splits signal into overlapping windows and normalizes
+# Signal preprocessing
 def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
     segments = []
     segment_labels = []
 
-    # create windows with 50% overlap
     for i in range(0, len(data) - window_size, window_size // 2):
         segment = data[i : i + window_size]
         if len(segment) == window_size:
             segments.append(segment)
-            # label window based on majority
             segment_label = np.mean(labels[i : i + window_size])
             segment_labels.append(1 if segment_label >= 0.5 else 0)
 
     segments = np.array(segments)
     segment_labels = np.array(segment_labels)
 
-    # normalize each segment independently
     scaler = StandardScaler()
     segments_scaled = np.array(
         [scaler.fit_transform(segment.reshape(-1, 1)).flatten() for segment in segments]
@@ -113,12 +100,10 @@ def train_signal_model(X_data, y_labels, window_size=250):
     device = device_func.device_func()
     print(f"Training on {device}")
 
-    # Split into train/val sets
     X_train, X_val, y_train, y_val = train_test_split(
         X_data, y_labels, test_size=0.2, random_state=42, stratify=y_labels
     )
 
-    # Create data loaders with larger batch size for bigger dataset
     train_dataset = SignalDataset(X_train, y_train)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_dataset = SignalDataset(X_val, y_val)
@@ -131,7 +116,7 @@ def train_signal_model(X_data, y_labels, window_size=250):
         optimizer, patience=3, verbose=True
     )
 
-    epochs = 30
+    epochs = 3
     best_val_acc = 0
     patience = 7
     patience_counter = 0
@@ -167,7 +152,6 @@ def train_signal_model(X_data, y_labels, window_size=250):
         train_acc = 100 * train_correct / train_total
         train_accuracies.append(train_acc)
 
-        # Validation
         model.eval()
         val_loss = 0.0
         val_correct = 0
@@ -206,38 +190,51 @@ def train_signal_model(X_data, y_labels, window_size=250):
     return model, train_accuracies, val_accuracies
 
 
-def train_and_evaluate():
+def train_and_evaluate(window_size=250):
     device = device_func.device_func()
     print(f"Training on {device}")
 
-    # Load MITBIH datasets
     train_df = pd.read_csv("data/mitbih_train.csv")
     test_df = pd.read_csv("data/mitbih_test.csv")
 
-    # Prepare data
-    X_train = train_df.values[:, :-1].astype(np.float32)
-    y_train = train_df.values[:, -1].astype(np.float32)
-    X_test = test_df.values[:, :-1].astype(np.float32)
-    y_test = test_df.values[:, -1].astype(np.float32)
+    # Preprocess data into segments
+    X_train, y_train = preprocess_signal_data(
+        train_df.values[:, :-1].flatten(),  # Flatten to single signal
+        train_df.values[:, -1].flatten(),
+        window_size=window_size,
+    )
+    X_test, y_test = preprocess_signal_data(
+        test_df.values[:, :-1].flatten(),
+        test_df.values[:, -1].flatten(),
+        window_size=window_size,
+    )
 
-    # Create data loaders
+    # Prepare datasets and dataloaders
     train_dataset = SignalDataset(X_train, y_train)
     test_dataset = SignalDataset(X_test, y_test)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32)
 
-    # Initialize model and training components
-    model = SignalCNN(input_shape=X_train.shape[1]).to(device)
+    # Initialize model
+    model = SignalCNN(input_shape=window_size).to(device)
+
+    # Try loading existing model
+    try:
+        model.load_state_dict(torch.load("best_model.pth"))
+        print("Loaded existing model for further training")
+    except FileNotFoundError:
+        print("Starting with new model")
+
+    # Training setup
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
 
-    # Training loop
-    epochs = 30
+    epochs = 3
     best_test_acc = 0
 
+    # Training loop
     for epoch in range(epochs):
-        # Training
         model.train()
         train_correct = 0
         train_total = 0
@@ -254,7 +251,6 @@ def train_and_evaluate():
             train_total += labels.size(0)
             train_correct += (predicted.squeeze() == labels).sum().item()
 
-        # Testing
         model.eval()
         test_correct = 0
         test_total = 0
@@ -269,6 +265,7 @@ def train_and_evaluate():
 
         train_acc = 100 * train_correct / train_total
         test_acc = 100 * test_correct / test_total
+
         print(f"Epoch {epoch+1}/{epochs}")
         print(f"Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
 
@@ -276,63 +273,11 @@ def train_and_evaluate():
             best_test_acc = test_acc
             torch.save(model.state_dict(), "best_model.pth")
 
-        scheduler.step(1 - test_acc / 100)
+        scheduler.step(test_acc)
 
     return model
 
 
-def predict_signal(
-    signal_data, model_path="best_model.pth", window_size=250, threshold=0.5
-):
-    """
-    Predict abnormalities in ECG signal using sliding windows.
-    Returns indices of abnormal regions with confidence scores.
-    """
-    device = device_func.device_func()
-
-    # Load and prepare model
-    model = SignalCNN(window_size).to(device)
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
-
-    # Normalize signal
-    scaler = StandardScaler()
-    signal_data = scaler.fit_transform(signal_data.reshape(-1, 1)).flatten()
-
-    # Analyze signal with sliding windows
-    abnormal_regions = []
-    stride = window_size // 2
-
-    with torch.no_grad():
-        for i in range(0, len(signal_data) - window_size + 1, stride):
-            window = signal_data[i : i + window_size]
-            window_tensor = torch.tensor(window, dtype=torch.float32).to(device)
-            output = model(window_tensor.unsqueeze(0))
-            probability = torch.sigmoid(output).item()
-
-            if probability > threshold:
-                abnormal_regions.append(
-                    {
-                        "start_idx": i,
-                        "end_idx": i + window_size,
-                        "confidence": probability,
-                    }
-                )
-
-    return abnormal_regions
-
-
+# Running the training
 if __name__ == "__main__":
-    # Load test data
-    test_df = pd.read_csv("data/mitbih_test.csv")
-    signal = test_df.values[:, :-1].astype(np.float32)[0]  # First signal
-
-    # Train model if needed
     model = train_and_evaluate()
-
-    # Test prediction
-    abnormal_regions = predict_signal(signal)
-    print("\nAbnormal Regions Detected:")
-    for region in abnormal_regions:
-        print(f"Region from {region['start_idx']} to {region['end_idx']}")
-        print(f"Confidence: {region['confidence']:.2f}")

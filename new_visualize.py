@@ -1,6 +1,61 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
+import torch
+from on_actual_data import SignalCNN, preprocess_signal_data
+import pandas as pd
+
+
+def load_trained_model(window_size=250, model_path="best_model.pth", device="cpu"):
+    """
+    Load the trained model for inference.
+    """
+    model = SignalCNN(input_shape=window_size).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+    return model
+
+
+def generate_abnormal_regions(model, signal_data, window_size=250, threshold=0.5):
+    """
+    Generate abnormal regions based on model predictions.
+
+    Args:
+        model: Trained model
+        signal_data: Array of signal data
+        window_size: Size of each segment to analyze
+        threshold: Threshold for abnormality
+
+    Returns:
+        List of dicts with start_idx, end_idx, and confidence for abnormal regions
+    """
+    segments, _ = preprocess_signal_data(
+        signal_data, np.zeros(len(signal_data)), window_size=window_size
+    )
+    segments = torch.tensor(
+        segments, dtype=torch.float32
+    )  # shape: [batch_size, window_size]
+    segments = segments.unsqueeze(
+        1
+    )  # Add channel dimension, shape: [batch_size, 1, window_size]
+    device = next(model.parameters()).device
+    segments = segments.to(device)
+
+    with torch.no_grad():
+        outputs = torch.sigmoid(model(segments)).squeeze()
+        abnormal_regions = []
+        for i, confidence in enumerate(outputs):
+            if confidence > threshold:
+                start_idx = i * (window_size // 2)
+                end_idx = start_idx + window_size
+                abnormal_regions.append(
+                    {
+                        "start_idx": start_idx,
+                        "end_idx": end_idx,
+                        "confidence": confidence.item(),
+                    }
+                )
+    return abnormal_regions
 
 
 def visualize_predictions(
@@ -77,39 +132,20 @@ def visualize_predictions(
     plt.show()
 
 
-def visualize_training_history(train_accuracies, val_accuracies, save_path=None):
-    """
-    Visualize training and validation accuracy over epochs.
-
-    Args:
-        train_accuracies: List of training accuracies
-        val_accuracies: List of validation accuracies
-        save_path: Optional path to save the plot
-    """
-    plt.figure(figsize=(10, 6))
-    epochs = range(1, len(train_accuracies) + 1)
-
-    plt.plot(epochs, train_accuracies, "b-", label="Training Accuracy")
-    plt.plot(epochs, val_accuracies, "r-", label="Validation Accuracy")
-
-    plt.title("Model Accuracy over Training Epochs")
-    plt.xlabel("Epoch")
-    plt.ylabel("Accuracy (%)")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-
-    plt.show()
-
-
 if __name__ == "__main__":
-    # Train model and visualize training history
-    model, train_accuracies, val_accuracies = train_signal_model()
-    visualize_training_history(train_accuracies, val_accuracies)
+    # Load signal data (replace with actual test data path)
+    test_df = pd.read_csv("data/mitbih_test.csv")
+    signal_data = test_df.values[:, :-1].flatten()  # Flatten the data for full signal
+    window_size = 250
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Visualize random test cases
-    visualize_random_test_cases(num_samples=4)
+    # Load model
+    model = load_trained_model(window_size=window_size, device=device)
+
+    # Generate abnormal regions
+    abnormal_regions = generate_abnormal_regions(
+        model, signal_data, window_size=window_size
+    )
+
+    # Visualize predictions
+    visualize_predictions(signal_data, abnormal_regions, window_size=window_size)
