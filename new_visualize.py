@@ -4,6 +4,7 @@ from matplotlib.patches import Rectangle
 import torch
 from on_actual_data import SignalCNN, preprocess_signal_data
 import pandas as pd
+import device_func
 
 
 def load_trained_model(window_size=250, model_path="best_model.pth", device="cpu"):
@@ -16,35 +17,32 @@ def load_trained_model(window_size=250, model_path="best_model.pth", device="cpu
     return model
 
 
-def generate_abnormal_regions(model, signal_data, window_size=250, threshold=0.5):
-    """
-    Generate abnormal regions based on model predictions.
-
-    Args:
-        model: Trained model
-        signal_data: Array of signal data
-        window_size: Size of each segment to analyze
-        threshold: Threshold for abnormality
-
-    Returns:
-        List of dicts with start_idx, end_idx, and confidence for abnormal regions
-    """
+def generate_abnormal_regions(model, signal_data, window_size=250, threshold=0.3):
     segments, _ = preprocess_signal_data(
         signal_data, np.zeros(len(signal_data)), window_size=window_size
     )
-    segments = torch.tensor(
-        segments, dtype=torch.float32
-    )  # shape: [batch_size, window_size]
-    segments = segments.unsqueeze(
-        1
-    )  # Add channel dimension, shape: [batch_size, 1, window_size]
+
+    print("Initial segments shape:", segments.shape)
+
+    # Convert to tensor without adding channel dimension
+    segments = torch.tensor(segments, dtype=torch.float32)  # [batch, 250]
+    print("Shape before model:", segments.shape)
+
     device = next(model.parameters()).device
     segments = segments.to(device)
 
     with torch.no_grad():
         outputs = torch.sigmoid(model(segments)).squeeze()
+        print(
+            "Prediction range:",
+            torch.min(outputs).item(),
+            "to",
+            torch.max(outputs).item(),
+        )
+
         abnormal_regions = []
         for i, confidence in enumerate(outputs):
+            confidence = confidence.item()
             if confidence > threshold:
                 start_idx = i * (window_size // 2)
                 end_idx = start_idx + window_size
@@ -52,9 +50,11 @@ def generate_abnormal_regions(model, signal_data, window_size=250, threshold=0.5
                     {
                         "start_idx": start_idx,
                         "end_idx": end_idx,
-                        "confidence": confidence.item(),
+                        "confidence": confidence,
                     }
                 )
+
+    print("Number of abnormal regions:", len(abnormal_regions))
     return abnormal_regions
 
 
@@ -63,14 +63,7 @@ def visualize_predictions(
 ):
     """
     Visualize the ECG signal with highlighted abnormal regions.
-
-    Args:
-        signal_data: Original signal data array
-        abnormal_regions: List of dicts with start_idx, end_idx, and confidence
-        window_size: Size of the window used for prediction
-        save_path: Optional path to save the plot
     """
-    # Create figure and axis
     plt.figure(figsize=(15, 8))
     ax = plt.gca()
 
@@ -85,16 +78,15 @@ def visualize_predictions(
         else 1.0
     )
 
-    # Plot abnormal regions
+    # Plot abnormal regions with higher opacity
     for region in abnormal_regions:
         start = region["start_idx"]
         end = region["end_idx"]
         confidence = region["confidence"]
 
-        # Calculate alpha based on confidence
-        alpha = 0.3 * (confidence / max_confidence)
+        # Higher base opacity
+        alpha = 0.5 * (confidence / max_confidence)
 
-        # Add highlighted rectangle
         rect = Rectangle(
             (start, plt.ylim()[0]),
             end - start,
@@ -109,23 +101,22 @@ def visualize_predictions(
             start, plt.ylim()[1] * 0.9, f"{confidence:.2f}", fontsize=8, rotation=90
         )
 
-    # Customize plot
     plt.title("ECG Signal Analysis with Abnormality Detection")
     plt.xlabel("Sample Index")
     plt.ylabel("Amplitude")
     plt.grid(True, alpha=0.3)
 
-    # Add legend
-    normal_patch = plt.Rectangle((0, 0), 1, 1, fc="b", alpha=0.5, label="Normal Signal")
+    # Add legend with more distinct colors
+    normal_patch = plt.Rectangle(
+        (0, 0), 1, 1, fc="blue", alpha=0.5, label="Normal Signal"
+    )
     abnormal_patch = plt.Rectangle(
-        (0, 0), 1, 1, fc="red", alpha=0.3, label="Abnormal Region"
+        (0, 0), 1, 1, fc="red", alpha=0.5, label="Abnormal Region"
     )
     plt.legend(handles=[normal_patch, abnormal_patch])
 
-    # Adjust layout
     plt.tight_layout()
 
-    # Save if path provided
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
@@ -133,11 +124,11 @@ def visualize_predictions(
 
 
 if __name__ == "__main__":
-    # Load signal data (replace with actual test data path)
+    # Load signal data
     test_df = pd.read_csv("data/mitbih_test.csv")
     signal_data = test_df.values[:, :-1].flatten()  # Flatten the data for full signal
     window_size = 250
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = device_func.device_func()
 
     # Load model
     model = load_trained_model(window_size=window_size, device=device)

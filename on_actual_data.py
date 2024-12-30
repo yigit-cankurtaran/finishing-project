@@ -63,7 +63,13 @@ class SignalCNN(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = x.unsqueeze(1)  # Add channel dimension for Conv1d
+        if len(x.shape) == 2:  # If input is [batch, window_size]
+            x = x.unsqueeze(
+                1
+            )  # Add channel dimension to make it [batch, 1, window_size]
+        elif len(x.shape) == 3:  # If input is already [batch, channel, window_size]
+            pass  # Don't add another dimension
+
         x = self.pool(torch.relu(self.bn1(self.conv1(x))))
         x = self.pool(torch.relu(self.bn2(self.conv2(x))))
         x = self.pool(torch.relu(self.bn3(self.conv3(x))))
@@ -75,10 +81,17 @@ class SignalCNN(nn.Module):
 
 # Signal preprocessing
 def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
+    """
+    Modified preprocessing function to ensure correct output shape.
+    """
     segments = []
     segment_labels = []
 
-    for i in range(0, len(data) - window_size, window_size // 2):
+    # Ensure data is 1D
+    data = data.flatten()
+    labels = labels.flatten()
+
+    for i in range(0, len(data) - window_size + 1, window_size // 2):
         segment = data[i : i + window_size]
         if len(segment) == window_size:
             segments.append(segment)
@@ -88,9 +101,10 @@ def preprocess_signal_data(data, labels, sampling_rate=360, window_size=250):
     segments = np.array(segments)
     segment_labels = np.array(segment_labels)
 
+    # Scale each segment individually
     scaler = StandardScaler()
     segments_scaled = np.array(
-        [scaler.fit_transform(segment.reshape(-1, 1)).flatten() for segment in segments]
+        [scaler.fit_transform(segment.reshape(-1, 1)).ravel() for segment in segments]
     )
 
     return segments_scaled, segment_labels
