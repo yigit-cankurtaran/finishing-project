@@ -8,13 +8,16 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import device_func
+import ast  # safer eval
 
 
 # dataset class
 class SignalDataset(Dataset):
     def __init__(self, data, labels):
-        self.data = torch.tensor(data, dtype=torch.float32)
+        # Transpose data to (batch, channels, time_steps)
+        self.data = torch.tensor(data, dtype=torch.float32).transpose(1, 2)
         self.labels = torch.tensor(labels, dtype=torch.float32)
+        print(f"Dataset shapes - Data: {self.data.shape}, Labels: {self.labels.shape}")
 
     def __len__(self):
         return len(self.data)
@@ -67,20 +70,41 @@ class SignalCNN(nn.Module):
 # preprocess ptb-xl signals
 def load_ptbxl_data(ptbxl_csv, signal_dir, sampling_rate=500, window_size=5000):
     df = pd.read_csv(ptbxl_csv)
-    df = df[df["fs"] == sampling_rate]
+
+    # select high-resolution signals if sampling rate is 500
+    if sampling_rate == 500:
+        df = df[df["filename_hr"].notna()]
+        file_column = "filename_hr"
+    elif sampling_rate == 100:
+        df = df[df["filename_lr"].notna()]
+        file_column = "filename_lr"
+    else:
+        raise ValueError("Invalid sampling rate. Choose 500 or 100 Hz.")
 
     data, labels = [], []
     for _, row in df.iterrows():
-        record_path = f"{signal_dir}/{row['filename_hr']}"
+        print(f"{signal_dir}/{row[file_column]}")
+        record_path = f"{signal_dir}/{row[file_column]}"
         record = wfdb.rdrecord(record_path)
         signal = record.p_signal  # shape: [timesteps, 12]
-        label = row["scp_codes"]  # or whatever label column you want
+
+        # safely parse scp_codes
+        try:
+            label_dict = ast.literal_eval(
+                row["scp_codes"]
+            )  # safely convert string to dict
+        except (ValueError, SyntaxError):
+            print(f"Invalid scp_codes: {row['scp_codes']}")
+            continue
+
+        # classify as normal if "NORM" is in the keys
+        binary_label = 1 if "NORM" in label_dict.keys() else 0
 
         # segment the signal
         for i in range(0, signal.shape[0] - window_size + 1, window_size // 2):
             segment = signal[i : i + window_size]
             data.append(segment)
-            labels.append(label)  # adapt for multi-label classification
+            labels.append(binary_label)
 
     return np.array(data), np.array(labels)
 
@@ -92,18 +116,19 @@ def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
 
     X, y = load_ptbxl_data(ptbxl_csv, signal_dir, window_size=window_size)
 
-    # preprocess labels (convert to binary or one-hot)
-    y_binary = np.array([1 if "NORM" in lbl else 0 for lbl in y])  # example logic
-
-    # train-test split
+    # Use y directly in train_test_split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y_binary, test_size=0.2, random_state=42
+        X, y, test_size=0.2, random_state=42
     )
 
-    # scale data
+    # Add shape checks
+    print(f"Before scaling - X_train shape: {X_train.shape}")
+
     scaler = StandardScaler()
     X_train = np.array([scaler.fit_transform(x) for x in X_train])
     X_test = np.array([scaler.transform(x) for x in X_test])
+
+    print(f"After scaling - X_train shape: {X_train.shape}")
 
     train_dataset = SignalDataset(X_train, y_train)
     test_dataset = SignalDataset(X_test, y_test)
@@ -140,5 +165,5 @@ def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
 
 if __name__ == "__main__":
     ptbxl_csv = "./data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/ptbxl_database.csv"
-    signal_dir = "./data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/records100"
+    signal_dir = "./data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/signals"
     model = train_and_evaluate(ptbxl_csv, signal_dir)
