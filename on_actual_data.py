@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import device_func
 import ast  # safer eval
+import os
 
 
 # dataset class
@@ -110,9 +111,18 @@ def load_ptbxl_data(ptbxl_csv, signal_dir, sampling_rate=500, window_size=5000):
 
 
 # train function
-def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
+def train_and_evaluate(
+    ptbxl_csv, signal_dir, model_path="best_model.pth", window_size=5000
+):
     device = device_func.device_func()
     print(f"Training on {device}")
+
+    # Check if model exists
+    if os.path.exists(model_path):
+        print(f"Loading existing model from {model_path}")
+        model = SignalCNN(input_shape=window_size, n_channels=12).to(device)
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        return model
 
     X, y = load_ptbxl_data(ptbxl_csv, signal_dir, window_size=window_size)
 
@@ -141,11 +151,15 @@ def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
 
-    # training loop
+    # training loop with model saving and accuracy calculation
     epochs = 30
+    best_loss = float("inf")
+
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
+        correct_predictions = 0
+        total_predictions = 0
 
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -156,9 +170,38 @@ def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
             optimizer.step()
             train_loss += loss.item()
 
+            # calculate accuracy
+            preds = torch.round(torch.sigmoid(outputs))
+            correct_predictions += (preds == labels.unsqueeze(1)).sum().item()
+            total_predictions += labels.size(0)
+
+        avg_loss = train_loss / len(train_loader)
+        accuracy = correct_predictions / total_predictions * 100
         print(
-            f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss/len(train_loader):.4f}"
+            f"Epoch {epoch+1}/{epochs} - Train Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%"
         )
+
+        # Validation loop
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels.unsqueeze(1))
+                val_loss += loss.item()
+
+        avg_val_loss = val_loss / len(test_loader)
+        print(f"Epoch {epoch+1}/{epochs} - Validation Loss: {avg_val_loss:.4f}")
+
+        # Step the scheduler
+        scheduler.step(avg_val_loss)
+
+        # Save model if it has the best validation loss so far
+        if avg_val_loss < best_loss:
+            best_loss = avg_val_loss
+            print(f"Saving best model with validation loss: {best_loss:.4f}")
+            torch.save(model.state_dict(), model_path)
 
     return model
 
@@ -166,4 +209,6 @@ def train_and_evaluate(ptbxl_csv, signal_dir, window_size=5000):
 if __name__ == "__main__":
     ptbxl_csv = "./data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/ptbxl_database.csv"
     signal_dir = "./data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/signals"
-    model = train_and_evaluate(ptbxl_csv, signal_dir)
+    model_path = "best_model.pth"
+
+    model = train_and_evaluate(ptbxl_csv, signal_dir, model_path)
