@@ -208,48 +208,64 @@ def train_and_evaluate(window_size=250):
     device = device_func.device_func()
     print(f"Training on {device}")
 
-    train_df = pd.read_csv("data/mitbih_train.csv")
-    test_df = pd.read_csv("data/mitbih_test.csv")
+    # Load and prepare data
+    normal_df = pd.read_csv("data/ptbdb_normal.csv")
+    abnormal_df = pd.read_csv("data/ptbdb_abnormal.csv")
 
-    # Preprocess data into segments
+    test_size = min(len(normal_df), len(abnormal_df)) // 4
+
+    # Split and combine data
+    normal_train = normal_df.iloc[:-test_size]
+    normal_test = normal_df.iloc[-test_size:]
+    abnormal_train = abnormal_df.iloc[:-test_size]
+    abnormal_test = abnormal_df.iloc[-test_size:]
+
+    train_df = pd.concat([normal_train, abnormal_train])
+    test_df = pd.concat([normal_test, abnormal_test])
+
+    train_df = train_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    test_df = test_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # Preprocess data
     X_train, y_train = preprocess_signal_data(
-        train_df.values[:, :-1].flatten(),  # Flatten to single signal
-        train_df.values[:, -1].flatten(),
+        train_df.values[:, :-1].astype(np.float32),
+        train_df.values[:, -1].astype(np.float32),
         window_size=window_size,
     )
     X_test, y_test = preprocess_signal_data(
-        test_df.values[:, :-1].flatten(),
-        test_df.values[:, -1].flatten(),
+        test_df.values[:, :-1].astype(np.float32),
+        test_df.values[:, -1].astype(np.float32),
         window_size=window_size,
     )
 
-    # Prepare datasets and dataloaders
+    # Setup data loaders
     train_dataset = SignalDataset(X_train, y_train)
     test_dataset = SignalDataset(X_test, y_test)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=32)
 
-    # Initialize model
+    # Model setup
     model = SignalCNN(input_shape=window_size).to(device)
 
-    # Try loading existing model
     try:
         model.load_state_dict(torch.load("best_model.pth"))
         print("Loaded existing model for further training")
     except FileNotFoundError:
         print("Starting with new model")
 
-    # Training setup
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
 
-    epochs = 3
-    best_test_acc = 0
+    epochs = 30
+    best_acc = 0
+    patience_counter = 0
+    max_patience = 7
 
     # Training loop
     for epoch in range(epochs):
         model.train()
+        train_loss = 0.0
         train_correct = 0
         train_total = 0
 
@@ -261,11 +277,14 @@ def train_and_evaluate(window_size=250):
             loss.backward()
             optimizer.step()
 
+            train_loss += loss.item()
             predicted = (torch.sigmoid(outputs) > 0.5).float()
             train_total += labels.size(0)
             train_correct += (predicted.squeeze() == labels).sum().item()
 
+        # Test loop
         model.eval()
+        test_loss = 0.0
         test_correct = 0
         test_total = 0
 
@@ -273,6 +292,8 @@ def train_and_evaluate(window_size=250):
             for inputs, labels in test_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
+                loss = criterion(outputs, labels.unsqueeze(1))
+                test_loss += loss.item()
                 predicted = (torch.sigmoid(outputs) > 0.5).float()
                 test_total += labels.size(0)
                 test_correct += (predicted.squeeze() == labels).sum().item()
@@ -281,17 +302,28 @@ def train_and_evaluate(window_size=250):
         test_acc = 100 * test_correct / test_total
 
         print(f"Epoch {epoch+1}/{epochs}")
-        print(f"Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
+        print(
+            f"Train Loss: {train_loss/len(train_loader):.4f}, Train Acc: {train_acc:.2f}%"
+        )
+        print(f"Test Loss: {test_loss/len(test_loader):.4f}, Test Acc: {test_acc:.2f}%")
 
-        if test_acc > best_test_acc:
-            best_test_acc = test_acc
+        if test_acc > best_acc:
+            best_acc = test_acc
             torch.save(model.state_dict(), "best_model.pth")
+            patience_counter = 0
+        else:
+            patience_counter += 1
 
-        scheduler.step(test_acc)
+        if patience_counter >= max_patience:
+            print("Early stopping triggered")
+            break
 
+        scheduler.step(test_loss)
+
+    print(f"Best test accuracy: {best_acc:.2f}%")
+    model.load_state_dict(torch.load("best_model.pth"))
     return model
 
 
-# Running the training
 if __name__ == "__main__":
     model = train_and_evaluate()
