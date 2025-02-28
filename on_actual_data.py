@@ -274,7 +274,13 @@ def train_and_evaluate(
     # Training loop with model saving and metrics calculation
     epochs = 30
     best_loss = float("inf")
-    history = {"train_loss": [], "val_loss": [], "val_f1": []}
+    history = {"train_loss": [], "val_loss": [], "val_f1": [], "val_accuracy": []}
+
+    # Early stopping parameters
+    patience = 5
+    patience_counter = 0
+
+    print("\nStarting training with early stopping (patience=5)...")
 
     for epoch in range(epochs):
         model.train()
@@ -297,6 +303,8 @@ def train_and_evaluate(
         val_loss = 0.0
         all_preds = []
         all_labels = []
+        correct_predictions = 0
+        total_samples = 0
 
         with torch.no_grad():
             for inputs, labels in test_loader:
@@ -310,9 +318,28 @@ def train_and_evaluate(
                 all_preds.append(preds.cpu().numpy())
                 all_labels.append(labels.cpu().numpy())
 
+                # Calculate accuracy (exact matches)
+                batch_correct = torch.all(preds == labels, dim=1).sum().item()
+                correct_predictions += batch_correct
+                total_samples += labels.size(0)
+
+                # Calculate per-class accuracy
+                for i in range(n_classes):
+                    class_preds = preds[:, i]
+                    class_labels = labels[:, i]
+                    class_correct = (class_preds == class_labels).sum().item()
+                    class_total = class_labels.size(0)
+
         # Calculate metrics
         all_preds = np.vstack(all_preds)
         all_labels = np.vstack(all_labels)
+
+        # Calculate exact match accuracy (percentage)
+        accuracy = (correct_predictions / total_samples) * 100
+        history["val_accuracy"].append(accuracy)
+
+        # Calculate hamming accuracy (percentage)
+        hamming_accuracy = np.mean(all_preds == all_labels) * 100
 
         # Calculate F1 score for each class and average
         f1_scores = []
@@ -330,7 +357,8 @@ def train_and_evaluate(
         history["val_f1"].append(avg_f1)
 
         print(
-            f"Epoch {epoch + 1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, F1: {avg_f1:.4f}"
+            f"Epoch {epoch + 1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, "
+            f"F1: {avg_f1:.4f}, Exact Match Accuracy: {accuracy:.2f}%, Hamming Accuracy: {hamming_accuracy:.2f}%"
         )
 
         # Step the scheduler
@@ -339,25 +367,44 @@ def train_and_evaluate(
         # Save model if it has the best validation loss so far
         if avg_val_loss < best_loss:
             best_loss = avg_val_loss
+            patience_counter = 0  # Reset patience counter
             print(f"Saving best model with validation loss: {best_loss:.4f}")
             torch.save(model.state_dict(), model_path)
+        else:
+            patience_counter += 1
+            print(
+                f"Validation loss did not improve. Patience: {patience_counter}/{patience}"
+            )
+
+            # Check if early stopping criteria is met
+            if patience_counter >= patience:
+                print(f"\nEarly stopping triggered after {epoch + 1} epochs!")
+                break
 
     # Plot training history
-    plt.figure(figsize=(12, 4))
-    plt.subplot(1, 2, 1)
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 1)
     plt.plot(history["train_loss"], label="Train Loss")
     plt.plot(history["val_loss"], label="Validation Loss")
     plt.legend()
     plt.title("Loss")
 
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.plot(history["val_f1"], label="F1 Score")
     plt.legend()
     plt.title("F1 Score")
 
+    plt.subplot(1, 3, 3)
+    plt.plot(history["val_accuracy"], label="Accuracy")
+    plt.legend()
+    plt.title("Exact Match Accuracy (%)")
+
     plt.tight_layout()
     plt.savefig("training_history.png")
     plt.close()
+
+    print("\nTraining completed!")
+    print(f"Best validation loss: {best_loss:.4f}")
 
     return model, diagnostic_classes, class_to_index, index_to_class
 
