@@ -1,0 +1,21 @@
+- yapay sinir ağları çalışmasından bahsedeceğiz, giriş-gelişme-sonuç bulmam gerek
+- hiç bilmeyen birisi anlayabilecek bir şekilde
+- kullanılan teknik terimleri minimuma indirip daha anlaşılabilir ve açıklanabilir bir şekilde
+- en sonda 2-3 sayfa bir rapor deneyebiliriz, grafikle zenginleştirebiliriz
+- confusion matrix ve multi hot matrix farkından bahsedebiliriz ben neden multi hot kullandım o tarz bir açıklama olur
+    - hangi özelliklerini vektörleştirdik, p dalgası veya qrs dalgası veya gürültünün etkisi falan
+- labelların anlamına bakabilirim rapor için faydalı olur
+- EKG sınıflandırma daha önceki örneklere bakabiliriz (daha önce benim yaptığım yaklaşımla kullanıldı mı gibi)
+- kullandığımız dataset daha önce kullanılmış mı vs.
+- daha önce yapılmamış bir şey yaparsak avantajlıyız
+
+- EEG sinyallerini başka kanallarda yakalamak zor
+- EEG sinyalinde beyin dalgalarına bakıyoruz
+- Temelde 4 domaine ayrılır (delta-theta-beta-alpha) dalgaları ve gamma dalgaları
+- Bunları göstermek önemli
+- EEG ile yapılan deneylere bak
+- Uyaran geldiğinde beyin aktivitesi nasıl değişir
+- Sınıflandırma zor olabilir, EEG üzerinde bir işlem yaptıktan sonra
+- EKG'de yaptığımız işi belirli bir EEG datasında yapıp benzer precision alabilme gibi
+
+- EKG/EEG classification model buna göre EKG ve EEG modelimiz çalıştırılabilir
