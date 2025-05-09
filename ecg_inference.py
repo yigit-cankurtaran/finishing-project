@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import argparse
 from ecg_training import EnhancedSignalCNN, load_scp_statements, interpret_predictions
+from enhanced_ecg_train import ECGNet
 import device_func
 
 
@@ -142,9 +143,7 @@ def load_model(model_path, scp_statements_csv, window_size=5000):
     n_classes = len(diagnostic_classes)
 
     # Initialize model
-    model = EnhancedSignalCNN(
-        input_shape=window_size, n_channels=12, n_classes=n_classes
-    ).to(device)
+    model = ECGNet(n_ch=12, n_cls=n_classes).to(device)
 
     # Load model weights
     if os.path.exists(model_path):
@@ -215,7 +214,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="enhanced_model.pth",
+        default="ecgnet_best.pth",
         help="Path to the trained model",
     )
     parser.add_argument(
