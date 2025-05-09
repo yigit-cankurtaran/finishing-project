@@ -10,3 +10,8 @@ print(mat.keys())                    # checking what’s inside
 
 print(mat['EC3A1'].shape) # prints(1,267)
 # 2d shape
+
+chan = mat['EC3A1']          # shape (1,267), dtype=object
+epoch0 = chan[0,0]           # grab first cell
+print(epoch0.shape)
+#prints (1,7500), likely 30s @ 250Hz
