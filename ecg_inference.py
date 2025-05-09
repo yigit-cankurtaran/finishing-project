@@ -6,7 +6,7 @@ import wfdb
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import argparse
-from on_actual_data import EnhancedSignalCNN, load_scp_statements, interpret_predictions
+from ecg_training import EnhancedSignalCNN, load_scp_statements, interpret_predictions
 import device_func
 
 
