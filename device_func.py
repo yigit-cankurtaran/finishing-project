@@ -1,6 +1,5 @@
 import torch
 
-
 def device_func():
     if torch.backends.mps.is_available():
         device = torch.device("mps")
