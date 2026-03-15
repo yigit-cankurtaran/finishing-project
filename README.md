@@ -176,5 +176,3 @@ See `requirements.txt` for complete dependency list.
 - Mobile deployment optimization
 
 ---
-
-*This project demonstrates the application of deep learning to biomedical signal analysis, providing robust tools for EEG and ECG classification tasks.* 
